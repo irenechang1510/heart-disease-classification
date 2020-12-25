@@ -1,0 +1,185 @@
+---
+title: "Heart disease classification"
+author: "Irene N. Chang"
+date: "12/24/2020"
+output: rmarkdown::github_document
+---
+
+## Data description:
+- age : age in years
+- sex = (1 = male; 0 = female)
+- cp= chest pain type
+- trestbps= resting blood pressure (in mm Hg on admission to the hospital)
+- chol = serum cholestoral in mg/dl
+- fbs = ( fasting blood sugar > 120 mg/dl) (1 = true; 0 = false)
+- restecg = resting electrocardiographic results
+- thalach = maximum heart rate achieved
+- exang = exercise induced angina (1 = yes; 0 = no)
+- oldpeak = ST depression induced by exercise relative to rest
+- slope = the slope of the peak exercise ST segment
+- ca = number of major vessels (0-3) colored by flourosopy
+- thal3 = normal; 6 = fixed defect; 7 = reversable defect
+- target = 1 or 0
+
+Load the libraries needed
+```{r}
+packages <- c("tidyverse", "ggplot2","gridExtra")
+sapply(packages, require, character.only=T)
+
+data = read.csv("Heart Disease Dataset.csv")
+head(data)
+```
+```{r}
+data$target <- as.factor(data$target)
+ggplot(data, aes(target, fill=target)) + geom_bar() + theme_classic() + theme(legend.position = "none")
+```
+
+The target is relatively balanced. We explore the data more
+```{r}
+str(data)
+summary(data)
+any(is.na(data))
+```
+
+There is no missing value in our dataset. 
+```{r}
+cor_data <- data
+cor_data$target <- as.numeric(cor_data$target)
+cor_matrix <- cor(cor_data)
+
+library(corrplot)
+corrplot(cor_matrix, method = "color", addCoef.col = "black", number.cex = 0.5, tl.col="black")
+```
+
+We now take a closer look at the variables that seem to correlate fairly strongly with our target variable: thalach, cp, exang, oldpeak.
+```{r}
+ggplot(data, aes(thalach))+
+	geom_histogram(aes(y = ..density..),bins=25, fill="red", alpha = 0.5, color = "black")+
+	geom_density()+
+	theme_classic()+
+	facet_wrap(~target)
+```
+
+```{r}
+data$cp <- as.factor(data$cp)
+data %>% group_by(cp) %>%
+	subset(target == 1) %>%
+	ggplot(aes(cp)) + geom_bar(aes(fill = cp)) + theme_classic() + theme(legend.position = "none")
+```
+
+```{r}
+data$exang <- factor(data$exang)
+ggplot(data, aes(exang, fill=target))+geom_bar() + theme_classic()
+```
+```{r}
+ggplot(data, aes(oldpeak))+
+	geom_histogram(aes(y = ..density..),bins=20, fill="green", alpha = 0.5, color = "black")+
+	geom_density()+
+	theme_classic()+
+	facet_wrap(~target)
+```
+```{r}
+data$restecg <- factor(data$restecg)
+ggplot(data, aes(restecg, fill=restecg)) + geom_bar() + theme_classic()
+```
+```{r}
+data$fbs <-factor(data$fbs)
+ggplot(data, aes(fbs, fill=fbs)) + geom_bar() + theme_classic()
+```
+
+Not many people died from complications of high suger level.
+
+The age distribution of the observations
+```{r}
+data$sex <- factor(data$sex)
+sex.labs <- c("male", "female")
+names(sex.labs) <- c("1", "0")
+ggplot(data, aes(age))+
+	geom_histogram(bins = 35, fill="blue", alpha = 0.5, color = "black")+
+	theme_classic()+
+	facet_wrap(sex~target, labeller=labeller(sex=sex.labs))+
+	geom_vline(xintercept = mean(data$age), color = "red", linetype = "dashed")
+```
+```{r}
+data$slope <- factor(data$slope)
+data$ca <- factor(data$ca)
+data$thal <- factor(data$thal)
+ggplot(data, aes(thal, group = target))+
+	geom_bar(aes(y = ..prop.., fill = factor(..x..)), stat="count") +
+	# prop is geom_bar features, not in geom_col
+	facet_wrap(~target)+
+	theme_classic()
+```
+
+Normalize the numeric data
+```{r}
+data$trestbps <- scale(data$trestbps)
+data$chol <- scale(data$chol)
+data$thalach <- scale(data$thalach)
+data$oldpeak <- scale(data$oldpeak)
+summary(data)
+```
+
+### Modeling
+1/ GLM 
+```{r}
+library(caTools)
+set.seed(4)
+sample <- sample.split(data$target,SplitRatio = 0.7)
+train <- subset(data, sample == T)
+test <- subset(data, sample == F)
+glm.fit <- glm(target~., data = train, family=binomial(logit))
+#summary(glm.fit)
+glm.pred <- predict(glm.fit, newdata=test, type="response")
+glm.pred <- ifelse(glm.pred>0.5, 1, 0)
+mean(glm.pred != test$target)
+```
+
+2/ Random forest with k-fold cross validation
+```{r}
+library(randomForest)
+library(boot)
+set.seed(4)
+k = 10
+folds <-  sample(1:k, nrow(data), replace = T)
+cv.errors <- rep(NA,k)
+for(j in 1:k){
+	rf.model <- randomForest(target~., data = data[folds!= k,])
+	rf.pred <- predict(rf.model,data[folds==j,])
+	cv.errors[j]= mean((data[folds==j,"target"]!=rf.pred))
+}
+mean(cv.errors)
+```
+
+3/ SVM with k-fold cross validation
+```{r}
+library(e1071)
+set.seed(4)
+k = 10
+folds <-  sample(1:k, nrow(data), replace = T)
+cv.errors <- rep(NA,k)
+for(j in 1:k){
+	svm.model <- svm(target~., data = data[folds!= k,])
+	svm.pred <- predict(svm.model,data[folds==j,])
+	cv.errors[j]= mean((data[folds==j,"target"]!=svm.pred))
+}
+mean(cv.errors)
+```
+
+4/ Tree methods
+```{r}
+library(rpart)
+library(rpart.plot)
+library(caTools)
+set.seed(150)
+sample <- sample.split(data$target,SplitRatio = 0.7)
+train <- subset(data, sample == T)
+test <- subset(data, sample == F)
+tree.md <- rpart(target~., method = "class", data = train)
+tree.pred <- predict(tree.md, test)
+tree.pred <- ifelse(glm.pred>0.5, 1, 0)
+mean(tree.pred != test$target)
+prp(tree.md)
+```
+
+Overall, Random Forest model performs the best.
